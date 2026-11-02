@@ -470,6 +470,8 @@ All PascalCase function components taking a `…Props` interface.
   (#267 — one list row for a `SearchResultGroup`: a group of one is the plain
   `SearchResultRow`, a group of 2+ is its primary plus an "N sources" toggle and
   compact per-source add/cart rows in the card's `footer`), `FilterChip`,
+  `FileListControls` (Files search surface, recursive-sort dropdown and staged
+  inclusion/completion filters),
   `EmptyState`, `SkeletonLoader` (+ `SkeletonTorrentCard`, `SkeletonTorrentDetail` — the latter covers the
   detail screen while a dead session reconnects), `PieceMap`,
   `ServerIconBadge` (per-server tinted
@@ -665,6 +667,10 @@ same entries — #234, #236) · `color.ts` (`withAlpha` —
 applies an alpha channel to a hex/rgb/rgba color string; `colors.*` defaults
 mix formats, so appending a hex alpha suffix silently no-ops on an rgba()
 base; `contrastRatio(a, b)` — WCAG 2 contrast ratio for hex/rgb/rgba strings, alpha ignored, unparsable → 1).
+
+- `utils/file-tree.ts` — pure Files search/filter pipeline and recursive sibling
+  sorting; preserves API indices, uses size-weighted folder completion, and scopes
+  folder actions to matching descendants.
 
 ### Types, constants, i18n
 

@@ -23,6 +23,13 @@ import { useTheme } from '@/context/ThemeContext';
 import { useToast } from '@/context/ToastContext';
 import { FocusAwareStatusBar } from '@/components/FocusAwareStatusBar';
 import { InputModal } from '@/components/InputModal';
+import { FileListControls } from '@/components/FileListControls';
+import {
+  buildFileTree,
+  filterTorrentFiles,
+  hasFileFilters,
+  DEFAULT_FILE_TREE_OPTIONS,
+} from '@/utils/file-tree';
 import { EmptyState } from '@/components/EmptyState';
 import { torrentsApi } from '@/services/api/torrents';
 import { TorrentFile, FilePriority } from '@/types/api';
@@ -30,19 +37,6 @@ import { formatProgress } from '@/utils/format';
 import { spacing, borderRadius } from '@/constants/spacing';
 import { shadows } from '@/constants/shadows';
 import { getErrorMessage } from '@/utils/error';
-
-interface FileTreeItem {
-  type: 'file' | 'folder';
-  name: string;
-  path: string;
-  depth: number;
-  file?: TorrentFile;
-  fileIndices?: number[]; // For folders, track all file indices
-  fileCount?: number;
-  size?: number;
-  allSelected?: boolean;
-  someSelected?: boolean;
-}
 
 export default function TorrentFilesScreen() {
   const { hash } = useLocalSearchParams<{ hash: string }>();
@@ -52,6 +46,8 @@ export default function TorrentFilesScreen() {
   const { colors, isDark } = useTheme();
   const { showToast } = useToast();
 
+  const [browseOptions, setBrowseOptions] = useState(DEFAULT_FILE_TREE_OPTIONS);
+  const filtersActive = hasFileFilters(browseOptions);
   const [files, setFiles] = useState<TorrentFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -139,14 +135,22 @@ export default function TorrentFilesScreen() {
     }
   };
 
+  const matchingFiles = useMemo(
+    () => filterTorrentFiles(files, browseOptions),
+    [files, browseOptions],
+  );
+
   const handleSelectAll = async () => {
-    if (updating) return;
+    if (updating || matchingFiles.length === 0) return;
     try {
       setUpdating(true);
-      const allIndices = files.map((f) => f.index);
+      const allIndices = matchingFiles.map((f) => f.index);
       await torrentsApi.setFilePriority(hash, allIndices, 1);
       await loadFiles();
-      showToast(t('toast.allFilesSelected'), 'success');
+      showToast(
+        t(filtersActive ? 'screens.files.browse.includedMatching' : 'toast.allFilesSelected'),
+        'success',
+      );
     } catch (error: unknown) {
       showToast(getErrorMessage(error), 'error');
     } finally {
@@ -155,13 +159,16 @@ export default function TorrentFilesScreen() {
   };
 
   const handleDeselectAll = async () => {
-    if (updating) return;
+    if (updating || matchingFiles.length === 0) return;
     try {
       setUpdating(true);
-      const allIndices = files.map((f) => f.index);
+      const allIndices = matchingFiles.map((f) => f.index);
       await torrentsApi.setFilePriority(hash, allIndices, 0);
       await loadFiles();
-      showToast(t('toast.allFilesDeselected'), 'success');
+      showToast(
+        t(filtersActive ? 'screens.files.browse.skippedMatching' : 'toast.allFilesDeselected'),
+        'success',
+      );
     } catch (error: unknown) {
       showToast(getErrorMessage(error), 'error');
     } finally {
@@ -303,8 +310,8 @@ export default function TorrentFilesScreen() {
   };
 
   const selectedIndices = useMemo(
-    () => files.filter((f) => f.priority > 0).map((f) => f.index),
-    [files],
+    () => matchingFiles.filter((f) => f.priority > 0).map((f) => f.index),
+    [matchingFiles],
   );
   const selectedCount = selectedIndices.length;
 
@@ -348,95 +355,10 @@ export default function TorrentFilesScreen() {
     return 'document';
   };
 
-  // Build tree structure and flatten for display
-  const displayItems = useMemo(() => {
-    const items: Array<FileTreeItem & { id: string }> = [];
-    const folderMap = new Map<string, { files: TorrentFile[]; indices: number[]; size: number }>();
-
-    // Group files by folder and track indices
-    files.forEach((file) => {
-      const parts = file.name.split('/');
-
-      // Track folders and their file indices
-      for (let i = 0; i < parts.length - 1; i++) {
-        const folderPath = parts.slice(0, i + 1).join('/');
-        if (!folderMap.has(folderPath)) {
-          folderMap.set(folderPath, { files: [], indices: [], size: 0 });
-        }
-        const folder = folderMap.get(folderPath)!;
-        if (!folder.indices.includes(file.index)) {
-          folder.files.push(file);
-          folder.indices.push(file.index);
-          folder.size += file.size;
-        }
-      }
-    });
-
-    // Build display list with proper hierarchy
-    const addedFolders = new Set<string>();
-
-    files.forEach((file) => {
-      const parts = file.name.split('/');
-      const fileName = parts[parts.length - 1];
-      const depth = parts.length - 1;
-
-      // Add parent folders first (only direct parent for this file)
-      for (let i = 0; i < depth; i++) {
-        const folderPath = parts.slice(0, i + 1).join('/');
-        const folderName = parts[i];
-
-        if (!addedFolders.has(folderPath)) {
-          addedFolders.add(folderPath);
-
-          // Check if parent is collapsed
-          const parentPath = parts.slice(0, i).join('/');
-          if (i > 0 && collapsedFolders.has(parentPath)) {
-            continue; // Skip if parent is collapsed
-          }
-
-          const folderData = folderMap.get(folderPath)!;
-          const allSelected = folderData.files.every((f) => f.priority > 0);
-          const someSelected = folderData.files.some((f) => f.priority > 0);
-
-          items.push({
-            id: `folder-${folderPath}`,
-            type: 'folder',
-            name: folderName,
-            path: folderPath,
-            depth: i,
-            fileCount: folderData.files.length,
-            size: folderData.size,
-            fileIndices: folderData.indices,
-            allSelected,
-            someSelected,
-          });
-        }
-      }
-
-      // Add file if parent folders are expanded
-      let parentCollapsed = false;
-      for (let i = 0; i < depth; i++) {
-        const folderPath = parts.slice(0, i + 1).join('/');
-        if (collapsedFolders.has(folderPath)) {
-          parentCollapsed = true;
-          break;
-        }
-      }
-
-      if (!parentCollapsed) {
-        items.push({
-          id: `file-${file.index}`,
-          type: 'file',
-          name: fileName,
-          path: file.name,
-          depth,
-          file,
-        });
-      }
-    });
-
-    return items;
-  }, [files, collapsedFolders]);
+  const displayItems = useMemo(
+    () => buildFileTree(files, browseOptions, collapsedFolders),
+    [files, browseOptions, collapsedFolders],
+  );
 
   if (!isConnected) {
     return (
@@ -487,6 +409,12 @@ export default function TorrentFilesScreen() {
           <EmptyState icon="folder-open-outline" title={t('screens.files.noFilesFound')} />
         ) : (
           <>
+            <FileListControls
+              options={browseOptions}
+              onChange={setBrowseOptions}
+              matching={matchingFiles.length}
+              total={files.length}
+            />
             {/* Bulk Actions Header */}
             <View
               style={[
@@ -495,20 +423,72 @@ export default function TorrentFilesScreen() {
               ]}
             >
               <TouchableOpacity
-                style={[styles.bulkActionButton, { backgroundColor: colors.primary }]}
+                style={[
+                  styles.bulkActionButton,
+                  {
+                    backgroundColor:
+                      matchingFiles.length > 0 ? colors.primary : colors.surfaceOutline,
+                  },
+                ]}
                 onPress={handleSelectAll}
-                disabled={updating}
+                disabled={updating || matchingFiles.length === 0}
+                accessibilityLabel={t(
+                  filtersActive
+                    ? 'screens.files.browse.includeMatching'
+                    : 'screens.files.selectAll',
+                )}
+                accessibilityState={{ disabled: updating || matchingFiles.length === 0 }}
               >
-                <Ionicons name="checkbox-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.bulkActionText}>{t('screens.files.selectAll')}</Text>
+                <Ionicons
+                  name="checkbox-outline"
+                  size={18}
+                  color={matchingFiles.length > 0 ? '#FFFFFF' : colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.bulkActionText,
+                    matchingFiles.length === 0 && { color: colors.textSecondary },
+                  ]}
+                >
+                  {t(
+                    filtersActive
+                      ? 'screens.files.browse.includeMatching'
+                      : 'screens.files.selectAll',
+                  )}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bulkActionButton, { backgroundColor: colors.error }]}
+                style={[
+                  styles.bulkActionButton,
+                  {
+                    backgroundColor:
+                      matchingFiles.length > 0 ? colors.error : colors.surfaceOutline,
+                  },
+                ]}
                 onPress={handleDeselectAll}
-                disabled={updating}
+                disabled={updating || matchingFiles.length === 0}
+                accessibilityLabel={t(
+                  filtersActive ? 'screens.files.browse.skipMatching' : 'screens.files.deselectAll',
+                )}
+                accessibilityState={{ disabled: updating || matchingFiles.length === 0 }}
               >
-                <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.bulkActionText}>{t('screens.files.deselectAll')}</Text>
+                <Ionicons
+                  name="close-circle-outline"
+                  size={18}
+                  color={matchingFiles.length > 0 ? '#FFFFFF' : colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.bulkActionText,
+                    matchingFiles.length === 0 && { color: colors.textSecondary },
+                  ]}
+                >
+                  {t(
+                    filtersActive
+                      ? 'screens.files.browse.skipMatching'
+                      : 'screens.files.deselectAll',
+                  )}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -529,19 +509,39 @@ export default function TorrentFilesScreen() {
                     selectedCount === 0 && { color: colors.textSecondary },
                   ]}
                 >
-                  {t('screens.files.changePriority')}
+                  {t(
+                    filtersActive
+                      ? 'screens.files.browse.priorityMatching'
+                      : 'screens.files.changePriority',
+                  )}
                 </Text>
               </TouchableOpacity>
               <View style={{ flex: 1, minWidth: 8 }} />
               <View style={styles.fileCountWrap}>
                 <Text style={[styles.fileCount, { color: colors.textSecondary }]}>
-                  {selectedCount} / {files.length}
+                  {selectedCount} / {matchingFiles.length}
                 </Text>
               </View>
             </View>
 
             <FlatList
               data={displayItems}
+              ListEmptyComponent={
+                <EmptyState
+                  compact
+                  icon="search-outline"
+                  title={t('screens.files.browse.noMatches')}
+                  actionLabel={t('screens.files.browse.clearAll')}
+                  onAction={() =>
+                    setBrowseOptions({
+                      ...browseOptions,
+                      query: '',
+                      inclusion: 'all',
+                      completion: 'all',
+                    })
+                  }
+                />
+              }
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
               removeClippedSubviews={false}
@@ -552,7 +552,7 @@ export default function TorrentFilesScreen() {
                 const indent = item.depth * 12;
 
                 if (item.type === 'folder') {
-                  const isCollapsed = collapsedFolders.has(item.path);
+                  const isCollapsed = !filtersActive && collapsedFolders.has(item.path);
                   return (
                     <View
                       style={[
@@ -592,17 +592,24 @@ export default function TorrentFilesScreen() {
                         onPress={() => handleFolderExpand(item.path)}
                         onLongPress={() => promptRenameFolder(item.path)}
                         delayLongPress={350}
+                        disabled={filtersActive}
+                        accessibilityLabel={item.name}
+                        accessibilityState={
+                          filtersActive ? { disabled: true } : { expanded: !isCollapsed }
+                        }
                       >
-                        <Ionicons
-                          name={isCollapsed ? 'chevron-forward' : 'chevron-down'}
-                          size={20}
-                          color={colors.text}
-                        />
+                        {!filtersActive && (
+                          <Ionicons
+                            name={isCollapsed ? 'chevron-forward' : 'chevron-down'}
+                            size={20}
+                            color={colors.text}
+                          />
+                        )}
                         <Ionicons
                           name="folder"
                           size={20}
                           color={colors.primary}
-                          style={{ marginLeft: 8 }}
+                          style={!filtersActive ? { marginLeft: 8 } : undefined}
                         />
                         <View style={styles.folderInfo}>
                           <Text style={[styles.folderName, { color: colors.text }]}>
@@ -610,7 +617,7 @@ export default function TorrentFilesScreen() {
                           </Text>
                           <Text style={[styles.folderMeta, { color: colors.textSecondary }]}>
                             {t('screens.files.filesCount', { count: item.fileCount })} •{' '}
-                            {formatSize(item.size || 0)}
+                            {formatSize(item.size || 0)} • {formatProgress(item.progress)}
                           </Text>
                         </View>
                       </TouchableOpacity>
@@ -938,6 +945,7 @@ const styles = StyleSheet.create({
   },
   bulkActionsHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -945,6 +953,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   bulkActionButton: {
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
@@ -953,6 +962,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.medium,
   },
   bulkActionText: {
+    flexShrink: 1,
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '600',

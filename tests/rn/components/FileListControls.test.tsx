@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { render, fireEvent, screen } from '@testing-library/react-native';
+import { render, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { FileListControls } from '@/components/FileListControls';
 import { DEFAULT_FILE_TREE_OPTIONS, FileTreeOptions } from '@/utils/file-tree';
 jest.mock('@/context/ThemeContext', () => ({
@@ -31,8 +31,10 @@ it('searches instantly and clears text without clearing applied filters', async 
   const onChange = jest.fn();
   await render(<Harness onChange={onChange} initial={{ inclusion: 'skipped' }} />);
   await fireEvent.changeText(screen.getByLabelText(key('search')), '.mp4');
-  expect(onChange).toHaveBeenLastCalledWith(
-    expect.objectContaining({ query: '.mp4', inclusion: 'skipped' }),
+  await waitFor(() =>
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: '.mp4', inclusion: 'skipped' }),
+    ),
   );
   await fireEvent.press(screen.getByLabelText('common.clearSearch'));
   expect(onChange).toHaveBeenLastCalledWith(

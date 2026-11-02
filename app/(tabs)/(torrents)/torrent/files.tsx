@@ -4,7 +4,7 @@
  * Key exports: TorrentFilesScreen (default)
  * Known issues: None currently tracked.
  */
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useTransition } from 'react';
 import {
   View,
   Text,
@@ -25,7 +25,8 @@ import { FocusAwareStatusBar } from '@/components/FocusAwareStatusBar';
 import { InputModal } from '@/components/InputModal';
 import { FileListControls } from '@/components/FileListControls';
 import {
-  buildFileTree,
+  buildFileTreeFromIndex,
+  createFileTreeIndex,
   filterTorrentFiles,
   hasFileFilters,
   DEFAULT_FILE_TREE_OPTIONS,
@@ -38,6 +39,8 @@ import { spacing, borderRadius } from '@/constants/spacing';
 import { shadows } from '@/constants/shadows';
 import { getErrorMessage } from '@/utils/error';
 
+const FILE_LIST_PAGE_SIZE = 300;
+
 export default function TorrentFilesScreen() {
   const { hash } = useLocalSearchParams<{ hash: string }>();
   const router = useRouter();
@@ -47,6 +50,10 @@ export default function TorrentFilesScreen() {
   const { showToast } = useToast();
 
   const [browseOptions, setBrowseOptions] = useState(DEFAULT_FILE_TREE_OPTIONS);
+  const [, startBrowseTransition] = useTransition();
+  const handleBrowseOptionsChange = useCallback((options: typeof DEFAULT_FILE_TREE_OPTIONS) => {
+    startBrowseTransition(() => setBrowseOptions(options));
+  }, []);
   const filtersActive = hasFileFilters(browseOptions);
   const [files, setFiles] = useState<TorrentFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,6 +63,7 @@ export default function TorrentFilesScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuFile, setMenuFile] = useState<TorrentFile | null>(null);
   const [bulkPriorityMenuVisible, setBulkPriorityMenuVisible] = useState(false);
+  const [visiblePage, setVisiblePage] = useState({ generation: '', limit: FILE_LIST_PAGE_SIZE });
   const [inputModalVisible, setInputModalVisible] = useState(false);
   const [inputModalConfig, setInputModalConfig] = useState<{
     title: string;
@@ -139,6 +147,7 @@ export default function TorrentFilesScreen() {
     () => filterTorrentFiles(files, browseOptions),
     [files, browseOptions],
   );
+  const fileTreeIndex = useMemo(() => createFileTreeIndex(files), [files]);
 
   const handleSelectAll = async () => {
     if (updating || matchingFiles.length === 0) return;
@@ -356,8 +365,18 @@ export default function TorrentFilesScreen() {
   };
 
   const displayItems = useMemo(
-    () => buildFileTree(files, browseOptions, collapsedFolders),
-    [files, browseOptions, collapsedFolders],
+    () => buildFileTreeFromIndex(fileTreeIndex, browseOptions, collapsedFolders, matchingFiles),
+    [fileTreeIndex, browseOptions, collapsedFolders, matchingFiles],
+  );
+  const displayGeneration = useMemo(
+    () => JSON.stringify([browseOptions, filtersActive ? null : [...collapsedFolders].sort()]),
+    [browseOptions, collapsedFolders, filtersActive],
+  );
+  const visibleLimit =
+    visiblePage.generation === displayGeneration ? visiblePage.limit : FILE_LIST_PAGE_SIZE;
+  const visibleDisplayItems = useMemo(
+    () => displayItems.slice(0, visibleLimit),
+    [displayItems, visibleLimit],
   );
 
   if (!isConnected) {
@@ -411,7 +430,7 @@ export default function TorrentFilesScreen() {
           <>
             <FileListControls
               options={browseOptions}
-              onChange={setBrowseOptions}
+              onChange={handleBrowseOptionsChange}
               matching={matchingFiles.length}
               total={files.length}
             />
@@ -525,7 +544,7 @@ export default function TorrentFilesScreen() {
             </View>
 
             <FlatList
-              data={displayItems}
+              data={visibleDisplayItems}
               ListEmptyComponent={
                 <EmptyState
                   compact
@@ -544,10 +563,18 @@ export default function TorrentFilesScreen() {
               }
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
-              removeClippedSubviews={false}
+              removeClippedSubviews
               initialNumToRender={10}
               maxToRenderPerBatch={5}
               windowSize={10}
+              onEndReachedThreshold={0.7}
+              onEndReached={() => {
+                if (visibleLimit >= displayItems.length) return;
+                setVisiblePage({
+                  generation: displayGeneration,
+                  limit: Math.min(visibleLimit + FILE_LIST_PAGE_SIZE, displayItems.length),
+                });
+              }}
               renderItem={({ item }) => {
                 const indent = item.depth * 12;
 

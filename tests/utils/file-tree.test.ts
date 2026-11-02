@@ -1,5 +1,7 @@
 import {
   buildFileTree,
+  buildFileTreeFromIndex,
+  createFileTreeIndex,
   DEFAULT_FILE_TREE_OPTIONS as defaults,
   filterTorrentFiles,
   FileTreeOptions,
@@ -154,5 +156,17 @@ describe('torrent file tree', () => {
     expect(result.indexOf('root/videos')).toBeLessThan(result.indexOf('root/photos'));
     expect(result.indexOf('root/videos/July')).toBeLessThan(result.indexOf('root/videos/January'));
     expect(files.map((item) => item.index)).toEqual(before);
+  });
+  it('reuses file rows across sorts so large virtualized lists can avoid rerendering them', () => {
+    const index = createFileTreeIndex(files);
+    const byName = buildFileTreeFromIndex(index, defaults, new Set());
+    const bySize = buildFileTreeFromIndex(
+      index,
+      { ...defaults, sort: 'size', direction: 'desc' },
+      new Set(),
+    );
+    expect(bySize.find((item) => item.path === 'root/videos/July/clip2.mp4')).toBe(
+      byName.find((item) => item.path === 'root/videos/July/clip2.mp4'),
+    );
   });
 });

@@ -38,7 +38,18 @@ interface Folder {
   folders: Map<string, Folder>;
   files: TorrentFile[];
   descendants: TorrentFile[];
+  size: number;
+  completedBytes: number;
 }
+export interface FileTreeIndex {
+  root: Folder;
+  fileItems: Map<number, FileTreeItem>;
+}
+
+const naturalNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+});
 export function hasFileFilters(options: FileTreeOptions): boolean {
   return !!options.query.trim() || options.inclusion !== 'all' || options.completion !== 'all';
 }
@@ -56,29 +67,71 @@ export function buildFileTree(
   options: FileTreeOptions,
   collapsed: Set<string>,
 ): FileTreeItem[] {
-  const root: Folder = { name: '', path: '', folders: new Map(), files: [], descendants: [] };
+  return buildFileTreeFromIndex(createFileTreeIndex(files), options, collapsed);
+}
+
+export function createFileTreeIndex(files: TorrentFile[]): FileTreeIndex {
+  const root: Folder = {
+    name: '',
+    path: '',
+    folders: new Map(),
+    files: [],
+    descendants: [],
+    size: 0,
+    completedBytes: 0,
+  };
+  const fileItems = new Map<number, FileTreeItem>();
   for (const file of files) {
     const parts = file.name.split('/');
     let folder = root;
     folder.descendants.push(file);
+    folder.size += file.size;
+    folder.completedBytes += file.size * file.progress;
     for (let i = 0; i < parts.length - 1; i++) {
       const name = parts[i];
       const path = parts.slice(0, i + 1).join('/');
       if (!folder.folders.has(name))
-        folder.folders.set(name, { name, path, folders: new Map(), files: [], descendants: [] });
+        folder.folders.set(name, {
+          name,
+          path,
+          folders: new Map(),
+          files: [],
+          descendants: [],
+          size: 0,
+          completedBytes: 0,
+        });
       folder = folder.folders.get(name)!;
       folder.descendants.push(file);
+      folder.size += file.size;
+      folder.completedBytes += file.size * file.progress;
     }
     folder.files.push(file);
+    fileItems.set(file.index, {
+      id: `file-${file.index}`,
+      type: 'file',
+      name: parts[parts.length - 1],
+      path: file.name,
+      depth: parts.length - 1,
+      file,
+      size: file.size,
+      progress: file.progress,
+    });
   }
-  const matches = new Set(filterTorrentFiles(files, options).map((file) => file.index));
+  return { root, fileItems };
+}
+
+export function buildFileTreeFromIndex(
+  index: FileTreeIndex,
+  options: FileTreeOptions,
+  collapsed: Set<string>,
+  matchingFiles = filterTorrentFiles(index.root.descendants, options),
+): FileTreeItem[] {
+  const matches = new Set(matchingFiles.map((file) => file.index));
   const active = hasFileFilters(options);
   const items: FileTreeItem[] = [];
   const sign = options.direction === 'asc' ? 1 : -1;
   const compare = (a: FileTreeItem, b: FileTreeItem) => {
-    const names =
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) ||
-      a.path.localeCompare(b.path);
+    const names = naturalNameCollator.compare(a.name, b.name) || a.path.localeCompare(b.path);
     if (options.sort === 'priority' && a.type === 'folder') return names;
     if (options.sort === 'name') return sign * names;
     const value =
@@ -93,7 +146,6 @@ export function buildFileTree(
     );
     const rows = folders.map((child) => {
       // Folder aggregates describe the whole folder, even when only some descendants match.
-      const size = child.descendants.reduce((sum, file) => sum + file.size, 0);
       const matching = child.descendants.filter((file) => matches.has(file.index));
       const item: FileTreeItem = {
         id: `folder-${child.path}`,
@@ -101,10 +153,8 @@ export function buildFileTree(
         name: child.name,
         path: child.path,
         depth,
-        size,
-        progress: size
-          ? child.descendants.reduce((sum, file) => sum + file.size * file.progress, 0) / size
-          : 0,
+        size: child.size,
+        progress: child.size ? child.completedBytes / child.size : 0,
         fileIndices: matching.map((file) => file.index),
         fileCount: child.descendants.length,
         allSelected: matching.every((file) => file.priority > 0),
@@ -117,20 +167,11 @@ export function buildFileTree(
       items.push(item);
       if (active || !collapsed.has(child.path)) visit(child, depth + 1);
     }
-    const fileRows: FileTreeItem[] = folder.files
+    const fileRows = folder.files
       .filter((file) => matches.has(file.index))
-      .map((file) => ({
-        id: `file-${file.index}`,
-        type: 'file',
-        name: file.name.split('/').pop()!,
-        path: file.name,
-        depth,
-        file,
-        size: file.size,
-        progress: file.progress,
-      }));
+      .map((file) => index.fileItems.get(file.index)!);
     items.push(...fileRows.sort(compare));
   }
-  visit(root, 0);
+  visit(index.root, 0);
   return items;
 }

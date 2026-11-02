@@ -1,5 +1,5 @@
 /** File-browser controls using the same search surface, dropdown, and chips as the main tabs. */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -30,6 +30,8 @@ export function FileListControls({ options, onChange, matching, total }: FileLis
   const { colors } = useTheme();
   const [panel, setPanel] = useState<'sort' | 'filter' | null>(null);
   const [draft, setDraft] = useState(options);
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const query = pendingQuery ?? options.query;
   const label = (key: string) => t(`screens.files.browse.${key}`);
   const patch = (value: Partial<FileTreeOptions>) => onChange({ ...options, ...value });
   const open = (value: 'sort' | 'filter') => {
@@ -37,6 +39,14 @@ export function FileListControls({ options, onChange, matching, total }: FileLis
     setDraft(options);
     setPanel(panel === value ? null : value);
   };
+  useEffect(() => {
+    if (pendingQuery === null) return;
+    const timer = setTimeout(() => {
+      onChange({ ...options, query: pendingQuery });
+      setPendingQuery(null);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [pendingQuery, options, onChange]);
   return (
     <View style={styles.controls}>
       <View style={styles.row}>
@@ -67,16 +77,19 @@ export function FileListControls({ options, onChange, matching, total }: FileLis
             placeholder={label('search')}
             accessibilityLabel={label('search')}
             placeholderTextColor={colors.textSecondary}
-            value={options.query}
+            value={query}
             onFocus={() => setPanel(null)}
-            onChangeText={(query) => patch({ query })}
+            onChangeText={setPendingQuery}
             autoCorrect={false}
             autoCapitalize="none"
             returnKeyType="search"
           />
-          {!!options.query && (
+          {!!query && (
             <TouchableOpacity
-              onPress={() => patch({ query: '' })}
+              onPress={() => {
+                setPendingQuery(null);
+                patch({ query: '' });
+              }}
               accessibilityLabel={t('common.clearSearch')}
               hitSlop={8}
             >
